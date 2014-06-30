@@ -1,7 +1,7 @@
 import csv
 from collections import defaultdict
 import numpy as np
-import marshal
+import marshal, pickle
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.tree import DecisionTreeClassifier
@@ -41,9 +41,9 @@ def calc_feature_dict(signal, slice=[0.,1.]):
     features["max_time"] = np.max(signal[:,0])
     features["min_time"] = np.min(signal[:,0])
     
-    signal = signal[signal.shape[0]*slice[0]:signal.shape[0]*slice[1]]    
-    accel_set = set(signal[:,1]).union(set(signal[:,2])).union(set(signal[:,3]))
-    features["diff_set"] = set(np.int32(np.diff(sorted(list(accel_set)))*1000))
+    #signal = signal[signal.shape[0]*slice[0]:signal.shape[0]*slice[1]]    
+    #accel_set = set(signal[:,1]).union(set(signal[:,2])).union(set(signal[:,3]))
+    #features["diff_set"] = set(np.int32(np.diff(sorted(list(accel_set)))*1000))
     
     return names, features
 
@@ -53,6 +53,10 @@ def calc_features(device, sample, return_names=False):
     sample_names, sample_features = sample
     
     names, features = [], []
+    features += device_features['raw']
+    features += sample_features['raw']
+
+    ''''
     for dn, df in zip(device_names, device_features['raw']): 
         features.append(df)
         names.append('device_' + dn)
@@ -60,19 +64,33 @@ def calc_features(device, sample, return_names=False):
     for sn, sf in zip(sample_names, sample_features['raw']): 
         features.append(sf)
         names.append('sample_' + sn)
-
-    for dn, df in zip(device_names, device_features['raw']): 
-        for sn, sf in zip(sample_names, sample_features['raw']): 
+    '''
+    '''
+    diff_feat = []
+    
+    for dn, df, i in zip(device_names, device_features['raw'], range(len(device_features['raw']))): 
+        for sn, sf, j in zip(sample_names, sample_features['raw'], range(len(sample_features['raw']))): 
             if (dn[0] == 't' and sn[0] == 't') or (dn[:3] == sn[:3]):
                 if (int(dn.split('_')[1]) >= int(sn.split('_')[1])):
+                    diff_feat.append((i,j))
                     features.append(df-sf)
                     names.append('diff_device_' + dn + '_sample_' + sn)
+
+    marshal.dump(diff_feat, open('diff_feat.p', 'w'))
+    '''
+    diff_feat = marshal.load(open('diff_feat.p', 'r'))
+    for i,j in diff_feat:
+        features.append(device_features['raw'][i] - sample_features['raw'][j])
 
     names.append('device_len')
     features.append(device_features['len'])
                 
     names.append('min_time-max_time')
     features += [sample_features["min_time"] - device_features["max_time"]]
+    
+    feat_imp = pickle.load(open('feat_imp.p', 'r'))    
+
+    features = [features[idx] for idx in feat_imp[1:100]]
 
     '''
     names.append('diff_set_intersection')
@@ -184,50 +202,50 @@ def compute_features(n_other_devices=5, train_ratio=0.7, use_traces=True):
 
     #marshal.dump(train_features, open('data/train/train_features.p', 'w'))
     #marshal.dump(train_labels, open('data/train/train_labels.p', 'w'))
-
-    traces = marshal.load(open('data/train/traces.p','r'))
-
-    trace_idx = {}
-    for idx, lt in enumerate(traces):
-        for elem in lt:
-            trace_idx[elem] = idx
     
-    seq_features = {}
+    if (use_traces):
+        traces = marshal.load(open('data/train/traces.p','r'))
 
-    print 'generating question features...'
-    question_features, question_ids = [], []
-    with open('questions.csv', 'r') as f:
-        reader = csv.reader(f)
-        reader.next()
-        for qid, sid, device in reader:
-            print qid
-            if int(sid) in trace_idx:
-                for sid2 in traces[trace_idx[int(sid)]]:
+        trace_idx = {}
+        for idx, lt in enumerate(traces):
+            for elem in lt:
+                trace_idx[elem] = idx
+    
+        seq_features = {}
+
+        print 'generating question features...'
+        question_features, question_ids = [], []
+        with open('questions.csv', 'r') as f:
+            reader = csv.reader(f)
+            reader.next()
+            for qid, sid, device in reader:
+                print qid
+                if int(sid) in trace_idx:
+                    for sid2 in traces[trace_idx[int(sid)]]:
+                        question_ids.append(int(qid))
+                        if sid2 not in seq_features:
+                            signal = np.asarray(marshal.load(open('data/test/sequence' + str(sid2) + '.p', 'r')))
+                            seq_features[sid2] = calc_feature_dict(signal)
+                            question_features.append(calc_features(device=device_features[int(device)], sample=seq_features[sid2]))
+                        else:
+                            question_features.append(calc_features(device=device_features[int(device)], sample=seq_features[sid2]))
+                else:
                     question_ids.append(int(qid))
-                    if sid2 not in seq_features:
-                        signal = np.asarray(marshal.load(open('data/test/sequence' + str(sid2) + '.p', 'r')))
-                        seq_features[sid2] = calc_feature_dict(signal)
-                        question_features.append(calc_features(device=device_features[int(device)], sample=seq_features[sid2]))
-                    else:
-                        question_features.append(calc_features(device=device_features[int(device)], sample=seq_features[sid2]))
-            else:
+                    signal = np.asarray(marshal.load(open('data/test/sequence' + sid + '.p', 'r')))
+                    question_features.append(calc_features(device=device_features[int(device)], sample=calc_feature_dict(signal)))
+    else:    
+        print 'generating question features...'
+        question_features, question_ids = [], []
+        with open('questions.csv', 'r') as f:
+            reader = csv.reader(f)
+            reader.next()
+            for qid, sid, device in reader:
+                #print '.', 
+                #sys.stdout.flush()
                 question_ids.append(int(qid))
                 signal = np.asarray(marshal.load(open('data/test/sequence' + sid + '.p', 'r')))
                 question_features.append(calc_features(device=device_features[int(device)], sample=calc_feature_dict(signal)))
 
-    '''
-    print 'generating question features...'
-    question_features, question_ids = [], []
-    with open('questions.csv', 'r') as f:
-        reader = csv.reader(f)
-        reader.next()
-        for qid, sid, device in reader:
-            #print '.', 
-            #sys.stdout.flush()
-            question_ids.append(int(qid))
-            signal = np.asarray(marshal.load(open('data/test/sequence' + sid + '.p', 'r')))
-            question_features.append(calc_features(device=device_features[int(device)], sample=calc_feature_dict(signal)))
-    '''
     
     #marshal.dump(question_features, open('data/test/question_features.p', 'w'))
     #marshal.dump(question_ids, open('data/test/question_ids.p', 'w'))
@@ -332,7 +350,7 @@ if __name__ == "__main__":
 
     if (recompute_features):
         np.random.seed(1)
-        train_features, train_labels, question_features, question_ids = compute_features(n_other_devices=5, use_traces=False)
+        train_features, train_labels, question_features, question_ids = compute_features(n_other_devices=5, use_traces=True)
     else:
         assert(0)
         train_features, train_labels, question_features, question_ids = marshal.load(open('data/train/features.p','r'))
